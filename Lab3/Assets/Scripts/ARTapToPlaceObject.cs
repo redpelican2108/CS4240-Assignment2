@@ -4,37 +4,64 @@ using System.Collections.Generic;
 using UnityEngine.XR.ARFoundation;
 using UnityEngine.XR.ARSubsystems;
 using UnityEngine;
+using UnityEngine.UI;
 using LightScrollSnap;
 using TMPro;
 
 public class ARTapToPlaceObject : MonoBehaviour
 {
+    enum State
+    {
+        PlacingObject,
+        SelectingObject,
+        MovingObject
+    }
+
+    [SerializeField] private ARRaycastManager aRRaycastManager;
     [SerializeField] private GameObject placementPrompt;
     [SerializeField] private GameObject placementIndicator;
-    [SerializeField] private GameObject scrollSnap;
+    [SerializeField] private TextMeshProUGUI selectedObjectText;
+    [SerializeField] private Button placeButton;
+    [SerializeField] private Button moveButton;
+    [SerializeField] private Button deleteButton;
+    [SerializeField] private CanvasGroup scrollSnapGroup;
+    [SerializeField] private ScrollSnap scrollSnap;
+    [SerializeField] private Material ghostMaterial;
+    [SerializeField] private Material errorMaterial;
     [SerializeField] private GameObject[] objectList;
 
     private GameObject objectToPlace;
-
     private Pose PlacementPose;
-    private ARRaycastManager aRRaycastManager;
     private bool placementPoseIsValid = false;
+    private GameObject ghostObject;
+    private GhostObject ghostObjectScript;
     private GameObject selectedObject;
-
-    public TextMeshProUGUI touchedObjectText;
-    public TextMeshProUGUI touchedCoordsText;
+    private State state;
 
     private void Start()
     {
-        aRRaycastManager = FindObjectOfType<ARRaycastManager>();
-
-        scrollSnap.GetComponent<ScrollSnap>().OnItemSelected.AddListener(OnSelectedItemChanged);
+        scrollSnap.OnItemSelected.AddListener(OnSelectedItemChanged);
         OnSelectedItemChanged(null, 0); // Initialize to select the first item
+        
+        SelectObject(null);
+
+        SetState(State.PlacingObject);
     }
 
     private void OnSelectedItemChanged(RectTransform go, int index)
     {
         objectToPlace = objectList[index];
+        UpdateGhostObject();
+    }
+
+    private void UpdateGhostObject()
+    {
+        Destroy(ghostObject);
+        ghostObject = Instantiate(objectToPlace, placementIndicator.transform);
+        ghostObject.name = objectToPlace.name;
+        ghostObjectScript = ghostObject.AddComponent<GhostObject>();
+        ghostObjectScript.ghostMaterial = this.ghostMaterial;
+        ghostObjectScript.errorMaterial = this.errorMaterial;
     }
 
     private void Update()
@@ -50,32 +77,108 @@ public class ARTapToPlaceObject : MonoBehaviour
 
         Touch touch = Input.GetTouch(0);
         if (touch.phase != TouchPhase.Began) return; // Not first frame of touch
-        touchedCoordsText.text = touch.position.ToString();
+
+        if (PointerOverUI.IsPointerOverUIObject(touch.position)) return; // Blocked by UI
 
         Ray ray = Camera.main.ScreenPointToRay(touch.position);
         RaycastHit hitInfo;
         if (Physics.Raycast(ray, out hitInfo, 100, ~LayerMask.GetMask("ARPlanes")))
         {
-            selectedObject = hitInfo.collider.gameObject;
-            touchedObjectText.text = selectedObject.name;
+            SelectObject(hitInfo.collider.gameObject);
+        }
+    }
+
+    private void SelectObject(GameObject obj)
+    {
+        if (selectedObject != null)
+        {
+            selectedObject.GetComponentInChildren<PlaceableObject>().Deselect();
+        }
+
+        selectedObject = obj;
+
+        if (selectedObject == null)
+        {
+            SetState(State.PlacingObject);
+        }
+        else
+        {
+            selectedObject.GetComponentInChildren<PlaceableObject>().Select();
+            SetState(State.SelectingObject);
+        }
+    }
+
+    private void SetState(State newState)
+    {
+        switch (newState)
+        {
+            case State.PlacingObject:
+                selectedObjectText.text = "No Object Selected";
+                placeButton.interactable = true;
+                moveButton.interactable = false;
+                deleteButton.interactable = false;
+                scrollSnapGroup.interactable = true;
+                scrollSnapGroup.alpha = 1;
+                ghostObject.SetActive(true);
+                break;
+            case State.SelectingObject:
+                selectedObjectText.text = "Selected " + selectedObject.name;
+                placeButton.interactable = true;
+                moveButton.interactable = true;
+                deleteButton.interactable = true;
+                scrollSnapGroup.interactable = true;
+                scrollSnapGroup.alpha = 1;
+                ghostObject.SetActive(true);
+                break;
+            case State.MovingObject:
+                selectedObjectText.text = "Moving " + selectedObject.name;
+                placeButton.interactable = true;
+                moveButton.interactable = false;
+                deleteButton.interactable = true;
+                scrollSnapGroup.interactable = false;
+                scrollSnapGroup.alpha = 0.2f;
+                ghostObject.SetActive(false);
+                break;
         }
     }
 
     public void AddFurniture()
     {
-        if (placementPoseIsValid)
+        if (!placementPoseIsValid) return;
+
+        if (!ghostObjectScript.IsPlaceable()) return;
+
+        PlaceObject();
+    }
+
+    public void PickUpFurniture()
+    {
+        if (selectedObject == null) return;
+        
+        for (int i = 0; i <= objectList.Length; i++)
         {
-            PlaceObject();
+            if (objectList[i].name == selectedObject.name)
+            {
+                scrollSnap.ScrollToItem(i);
+                UpdateGhostObject();
+                break;
+            }
         }
+        
+        Destroy(selectedObject);
+        SelectObject(null);
+
+        SetState(State.PlacingObject);
     }
 
     public void DeleteFurniture()
     {
-        if (selectedObject)
-        {
-            Destroy(selectedObject);
-            touchedObjectText.text = "No Object Selected";
-        }
+        if (selectedObject == null) return;
+
+        Destroy(selectedObject);
+        SelectObject(null);
+
+        SetState(State.PlacingObject);
     }
 
     private void UpdatePlacementPose()
@@ -99,22 +202,21 @@ public class ARTapToPlaceObject : MonoBehaviour
             placementPrompt.SetActive(false);
             placementIndicator.SetActive(true);
             placementIndicator.transform.SetPositionAndRotation(PlacementPose.position, PlacementPose.rotation);
+
+            placeButton.interactable = ghostObjectScript.IsPlaceable();
         }
         else
         {
             placementPrompt.SetActive(true);
             placementIndicator.SetActive(false);
+            placeButton.interactable = false;
         }
     }
 
     private void PlaceObject()
     {
         GameObject placedObject = Instantiate(objectToPlace, PlacementPose.position, PlacementPose.rotation);
+        placedObject.name = objectToPlace.name;
         placedObject.transform.Rotate(new Vector3(-90, 0, 0));
-    }
-
-    public void SetActiveObject(GameObject gameObject)
-    {
-        objectToPlace = gameObject;
     }
 }
