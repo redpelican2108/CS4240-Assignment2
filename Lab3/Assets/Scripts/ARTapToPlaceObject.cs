@@ -59,6 +59,7 @@ public class ARTapToPlaceObject : MonoBehaviour
         Destroy(ghostObject);
         ghostObject = Instantiate(objectToPlace, placementIndicator.transform);
         ghostObject.name = objectToPlace.name;
+        ghostObject.layer = LayerMask.NameToLayer("Ghost");
         ghostObjectScript = ghostObject.AddComponent<GhostObject>();
         ghostObjectScript.ghostMaterial = this.ghostMaterial;
         ghostObjectScript.errorMaterial = this.errorMaterial;
@@ -82,7 +83,7 @@ public class ARTapToPlaceObject : MonoBehaviour
 
         Ray ray = Camera.main.ScreenPointToRay(touch.position);
         RaycastHit hitInfo;
-        if (Physics.Raycast(ray, out hitInfo, 100, ~LayerMask.GetMask("ARPlanes")))
+        if (Physics.Raycast(ray, out hitInfo, 100, LayerMask.GetMask("PlaceableObject")))
         {
             SelectObject(hitInfo.collider.gameObject);
         }
